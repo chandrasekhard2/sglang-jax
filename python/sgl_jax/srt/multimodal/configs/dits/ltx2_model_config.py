@@ -38,6 +38,7 @@ class LTX2ModelConfig(MultiModalModelConfigs):
 
     # Common parameters
     caption_channels: int = 3840
+    text_dim: int = 3840
     epsilon: float = 1e-6
     qk_norm: str = "rms_norm"
 
@@ -79,7 +80,7 @@ class LTX2ModelConfig(MultiModalModelConfigs):
     # Latent space parameters
     latent_input_dim: int = 128
     scale_factor_temporal: int = 8   # VAE temporal compression ratio
-    scale_factor_spatial: int = 32   # VAE spatial compression ratio
+    scale_factor_spatial: int = 32   # VAE spatial compression ratio (8x VAE * 4x patch_size)
 
     # Scheduler and execution parameters
     scheduler_type: str = "EulerScheduler"

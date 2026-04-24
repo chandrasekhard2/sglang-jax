@@ -53,6 +53,7 @@ class LoadConfig:
     # this will be used in MultiModal since it has serval model class for one model
     model_class: Any = None
     ignore_patterns: list[str] | str | None = None
+    allow_patterns: list[str] | str | None = None
     decryption_key_file: str | None = None
 
     def __post_init__(self):

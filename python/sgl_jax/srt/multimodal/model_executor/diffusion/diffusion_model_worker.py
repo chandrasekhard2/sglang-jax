@@ -89,6 +89,8 @@ class DiffusionModelWorker:
                     req = Req(
                         prompt_embeds=embeds[0],
                         negative_prompt_embeds=embeds[1],
+                        audio_prompt_embeds=embeds[0] if getattr(self.model_config, "is_audio_enabled", False) else None,
+                        audio_negative_prompt_embeds=embeds[1] if getattr(self.model_config, "is_audio_enabled", False) else None,
                         do_classifier_free_guidance=True,
                         width=width,
                         height=height,

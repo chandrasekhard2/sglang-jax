@@ -75,6 +75,7 @@ class ServerArgs:
     device: str | None = None
     device_indexes: list[int] | None = None
     tp_size: int = 1
+    sp_size: int = 1
     ep_size: int = 1
     ep_num_redundant_experts: int = 0
     ep_dispatch_algorithm: str | None = None
@@ -583,6 +584,12 @@ class ServerArgs:
             type=int,
             default=ServerArgs.tp_size,
             help="The tensor parallelism size.",
+        )
+        parser.add_argument(
+            "--sp-size",
+            type=int,
+            default=ServerArgs.sp_size,
+            help="The sequence parallelism size.",
         )
         parser.add_argument(
             "--ep-size",

@@ -686,16 +686,15 @@ class VideoDecoder(nnx.Module):
         if rngs is None:
             rngs = nnx.Rngs(0)
         if decoder_blocks is None:
-            # Default LTX-2 decoder blocks (in reverse order from encoder)
+            # Default LTX-2 decoder blocks matching safetensors metadata
             decoder_blocks = [
-                ("compress_all", {"residual": True, "multiplier": 1}),
-                ("res_x", {"num_layers": 3}),
-                ("compress_all", {"residual": True, "multiplier": 1}),
-                ("res_x", {"num_layers": 3}),
-                ("compress_time", {}),
-                ("res_x", {"num_layers": 3}),
-                ("compress_space", {}),
-                ("res_x", {"num_layers": 3}),
+                ("res_x", {"num_layers": 5, "inject_noise": False}),
+                ("compress_all", {"residual": True, "multiplier": 2}),
+                ("res_x", {"num_layers": 5, "inject_noise": False}),
+                ("compress_all", {"residual": True, "multiplier": 2}),
+                ("res_x", {"num_layers": 5, "inject_noise": False}),
+                ("compress_all", {"residual": True, "multiplier": 2}),
+                ("res_x", {"num_layers": 5, "inject_noise": False})
             ]
 
         self.patch_size = patch_size

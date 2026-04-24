@@ -178,11 +178,11 @@ class Gemma2DecoderLayer(nnx.Module):
             config.num_key_value_heads,
             config.head_dim,
             config.max_position_embeddings,
-            rope_theta=config.rope_theta,
-            query_pre_attn_scalar=config.query_pre_attn_scalar,
-            sliding_window_size=config.sliding_window if use_sliding_window else 0,
+            rope_theta=getattr(config, "rope_theta", 10000.0),
+            query_pre_attn_scalar=getattr(config, "query_pre_attn_scalar", 1.0),
+            sliding_window_size=getattr(config, "sliding_window", 0) if use_sliding_window else 0,
             logit_cap=getattr(config, "attn_logit_softcapping", 0.0),
-            attention_bias=config.attention_bias,
+            attention_bias=getattr(config, "attention_bias", False),
             dtype=dtype,
             mesh=mesh,
         )
@@ -275,7 +275,6 @@ class Gemma2Model(nnx.Module):
         self.norm = GemmaRMSNorm(config.hidden_size, epsilon=config.rms_norm_eps)
 
         self.hidden_size = config.hidden_size
-        self.capture_aux_hidden_states = False
 
     def __call__(
         self,
@@ -285,10 +284,6 @@ class Gemma2Model(nnx.Module):
         hidden_states = self.embed_tokens(forward_batch.input_ids)
         hidden_states *= jnp.array([self.hidden_size**0.5], dtype=hidden_states.dtype)
 
-        aux_hidden_states = []
-        if self.capture_aux_hidden_states:
-            aux_hidden_states.append(hidden_states)
-
         residual = None
         layers_kv_fused = []
         for i in range(len(self.layers)):
@@ -297,16 +292,12 @@ class Gemma2Model(nnx.Module):
                 hidden_states, forward_batch, token_to_kv_pool, residual
             )
             layers_kv_fused.append(kv_fused)
-            if self.capture_aux_hidden_states:
-                aux_hidden_states.append(hidden_states + residual if residual is not None else hidden_states)
 
         if residual is not None:
             hidden_states += residual
 
         hidden_states = self.norm(hidden_states)
 
-        if self.capture_aux_hidden_states:
-            return hidden_states, aux_hidden_states, layers_kv_fused
         return hidden_states, layers_kv_fused
 
 

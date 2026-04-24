@@ -133,9 +133,7 @@ class DefaultModelLoader(BaseModelLoader):
             
             # Prevent massive downloads of unused variants for LTX-2
             ignore_patterns = self.load_config.ignore_patterns
-            allow_patterns = None
-            if "LTX" in model_name_or_path:
-                allow_patterns = ["ltx-2-19b-dev.safetensors", "*.json", "*.txt"]
+            allow_patterns = self.load_config.allow_patterns
 
             hf_folder = snapshot_download(
                 model_name_or_path,

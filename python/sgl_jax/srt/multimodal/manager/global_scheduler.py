@@ -121,7 +121,11 @@ class GlobalScheduler:
         stage_devices = {}
         configs_by_size = sorted(enumerate(self.stage_configs), key=lambda x: x[1].runtime.num_tpus, reverse=True)
         for idx, cfg in configs_by_size:
-            stage_devices[idx] = self.device_manager.allocate(cfg.runtime.num_tpus)
+            device_kind = getattr(cfg.runtime, "device_kind", "tpu")
+            if device_kind == "cpu":
+                stage_devices[idx] = None
+            else:
+                stage_devices[idx] = self.device_manager.allocate(cfg.runtime.num_tpus)
 
         def _build_stage(idx_cfg: tuple[int, Any]) -> tuple[int, Stage]:
             idx, cfg = idx_cfg

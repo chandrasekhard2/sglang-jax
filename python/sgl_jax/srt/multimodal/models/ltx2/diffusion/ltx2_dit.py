@@ -132,9 +132,9 @@ def compute_video_pe(T: int, H: int, W: int, fps: float, theta: float, inner_dim
     grid_t, grid_h, grid_w = jnp.meshgrid(t_mid, h_mid, w_mid, indexing='ij')
 
     # Fractional positions normalized by max_pos, scaled to [-1, 1]
-    frac_t = grid_t / max_pos[0]
-    frac_h = grid_h / max_pos[1]
-    frac_w = grid_w / max_pos[2]
+    frac_t = jnp.clip(grid_t, 0, max_pos[0]) / max_pos[0]
+    frac_h = jnp.clip(grid_h, 0, max_pos[1]) / max_pos[1]
+    frac_w = jnp.clip(grid_w, 0, max_pos[2]) / max_pos[2]
 
     fractional_positions = jnp.stack([frac_t, frac_h, frac_w], axis=-1)
     num_tokens = T * H * W
@@ -203,7 +203,7 @@ def compute_1d_pe(midpoints, theta, inner_dim, num_heads, max_pos=20):
     )
     indices = jnp.array((pow_indices * (math.pi / 2.0)), dtype=jnp.float32)
 
-    frac = midpoints / max_pos
+    frac = jnp.clip(midpoints, 0, max_pos) / max_pos
     frac_scaled = (frac * 2.0 - 1.0)[:, None]  # [seq_len, 1]
 
     freqs = frac_scaled * indices[None, :]  # [seq_len, indices_len]
@@ -1019,7 +1019,7 @@ class LTX2Transformer3DModel(nnx.Module):
 
             # Timestep embedding: returns (adaln_cond [B, 6*dim], embedded_ts [B, dim])
             v_adaln_cond, v_embedded_ts = self.adaln_single(
-                timesteps.flatten() * self.config.timestep_scale_multiplier
+                timesteps.flatten()
             )
             v_adaln_cond = v_adaln_cond.reshape(batch_size, 1, v_adaln_cond.shape[-1])
 
@@ -1052,10 +1052,10 @@ class LTX2Transformer3DModel(nnx.Module):
             # Add cross attention timesteps and cross PE if audio is enabled
             if self.config.is_audio_enabled:
                 v_cross_ss_adaln, _ = self.av_ca_video_scale_shift_adaln(
-                    timesteps.flatten() * self.config.timestep_scale_multiplier
+                    timesteps.flatten()
                 )
                 v_cross_gate_adaln, _ = self.av_ca_a2v_gate_adaln(
-                    timesteps.flatten() * self.config.av_ca_timestep_scale_multiplier
+                    timesteps.flatten()
                 )
                 video_args["cross_scale_shift_timestep"] = v_cross_ss_adaln.reshape(
                     batch_size, 1, v_cross_ss_adaln.shape[-1]
@@ -1084,7 +1084,7 @@ class LTX2Transformer3DModel(nnx.Module):
 
             # Timestep embedding: returns (adaln_cond, embedded_ts) tuple
             a_adaln_cond, a_embedded_ts = self.audio_adaln_single(
-                audio_timesteps_to_use.flatten() * self.config.timestep_scale_multiplier
+                audio_timesteps_to_use.flatten()
             )
             a_adaln_cond = a_adaln_cond.reshape(batch_size, 1, a_adaln_cond.shape[-1])
 
@@ -1114,10 +1114,10 @@ class LTX2Transformer3DModel(nnx.Module):
             # Add cross attention timesteps if video is enabled
             if self.config.is_video_enabled:
                 a_cross_ss_adaln, _ = self.av_ca_audio_scale_shift_adaln(
-                    audio_timesteps_to_use.flatten() * self.config.timestep_scale_multiplier
+                    audio_timesteps_to_use.flatten()
                 )
                 a_cross_gate_adaln, _ = self.av_ca_v2a_gate_adaln(
-                    audio_timesteps_to_use.flatten() * self.config.av_ca_timestep_scale_multiplier
+                    audio_timesteps_to_use.flatten()
                 )
                 audio_args["cross_scale_shift_timestep"] = a_cross_ss_adaln.reshape(
                     batch_size, 1, a_cross_ss_adaln.shape[-1]

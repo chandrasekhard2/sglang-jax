@@ -36,9 +36,17 @@ def download_from_hf(model_path: str, allow_patterns: list[str] | None = _UNSET,
         return model_path
 
     if "LTX" in model_path and (allow_patterns is None or allow_patterns is _UNSET):
-        allow_patterns = ["ltx-2-19b-dev.safetensors", "*.json", "*.txt"]
+        allow_patterns = [
+            "ltx-2-19b-dev.safetensors", 
+            "*.json", 
+            "*.txt", 
+            "*/*.model",
+            "text_encoder/*.safetensors", 
+            "vae/*.safetensors", 
+            "audio_vae/*.safetensors", 
+            "connectors/*.safetensors"
+        ]
     elif "gemma-3" in model_path and (allow_patterns is None or allow_patterns is _UNSET):
-        # Only download config/tokenizer files; weights are loaded from cache by load_weights()
         allow_patterns = ["*.json", "*.txt", "*.model", "*.tiktoken"]
     elif allow_patterns is _UNSET:
         allow_patterns = ["*.json", "*.bin", "*.model", "*.py", "*.tiktoken"]
@@ -220,6 +228,20 @@ def get_tokenizer(
             clean_up_tokenization_spaces=False,
             **kwargs,
         )
+    except (OSError, ValueError):
+        # Fallback for models where the tokenizer is in a subfolder (e.g. LTX-2)
+        fallback_path = os.path.join(tokenizer_name, "tokenizer")
+        if os.path.exists(fallback_path):
+            tokenizer = AutoTokenizer.from_pretrained(
+                fallback_path,
+                *args,
+                trust_remote_code=trust_remote_code,
+                tokenizer_revision=tokenizer_revision,
+                clean_up_tokenization_spaces=False,
+                **kwargs,
+            )
+        else:
+            raise
     except TypeError as e:
         # The LLaMA tokenizer causes a protobuf error in some environments.
         err_msg = (

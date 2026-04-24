@@ -168,6 +168,7 @@ class VaeScheduler(SchedulerProfilerMixin):
             # Decode audio latents if present
             if getattr(req, "audio_latents", None) is not None and self.audio_decoder is not None:
                 self._decode_audio(req)
+
             # Clear all JAX array fields before sending to detokenizer process.
             # The detokenizer runs in a separate process without TPU access, so
             # any remaining jax.Array fields will fail to unpickle.

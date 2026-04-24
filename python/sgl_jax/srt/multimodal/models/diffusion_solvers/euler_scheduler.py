@@ -63,8 +63,8 @@ class EulerScheduler:
         if mu is not None:
             sigma_shift = mu
         else:
-            # LTX-2 token calculation if mu isn't provided directly
-            tokens = math.prod(shape[2:]) if len(shape) >= 3 else 4096
+            # LTX-2 token calculation (T * H * W, excluding C)
+            tokens = shape[1] * shape[2] * shape[3] if len(shape) == 5 else math.prod(shape[2:])
             x1 = 1024
             x2 = 4096
             mm = (self.max_shift - self.base_shift) / (x2 - x1)
@@ -114,7 +114,7 @@ class EulerScheduler:
         Take a single Euler step.
         
         Args:
-            model_output: Direct output from the diffusion model (velocity prediction)
+            model_output: Direct output from the diffusion model (denoised sample / x_0)
             timestep: Current discrete timestep
             sample: Current noisy sample (latent)
             return_dict: Whether to return FlowSchedulerOutput or tuple

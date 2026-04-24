@@ -211,7 +211,6 @@ class LTX2GemmaTextEncoder(nnx.Module):
         self.dtype = dtype
 
         self.model = Gemma2Model(config, dtype=dtype, mesh=mesh)
-        self.model.capture_aux_hidden_states = True
         # Augment Gemma2Model layers with Gemma3-specific features (QK norms,
         # per-layer RoPE theta/scaling) needed by forward_no_cache.
         self._augment_gemma3_layers(config, dtype)
@@ -249,7 +248,21 @@ class LTX2GemmaTextEncoder(nnx.Module):
         PROMPT_LEN = 1024
 
         # Get all hidden states from Gemma model (causal attention)
-        _, aux_hidden_states, layers_kv_fused = self.model(forward_batch, token_to_kv_pool)
+        hidden_states = self.model.embed_tokens(forward_batch.input_ids)
+        hidden_states *= jnp.array([self.model.hidden_size**0.5], dtype=hidden_states.dtype)
+
+        aux_hidden_states = [hidden_states]
+        residual = None
+        for i in range(len(self.model.layers)):
+            layer = self.model.layers[i]
+            hidden_states, residual, _ = layer(
+                hidden_states, forward_batch, token_to_kv_pool, residual
+            )
+            aux_hidden_states.append(hidden_states + residual if residual is not None else hidden_states)
+
+        if residual is not None:
+            hidden_states += residual
+        hidden_states = self.model.norm(hidden_states)
 
         # Stack to [N_total, D, L] where L = 49 (embed + 48 layers)
         stacked_hidden_states = jnp.stack(aux_hidden_states, axis=-1)
@@ -332,7 +345,7 @@ class LTX2GemmaTextEncoder(nnx.Module):
                 layer_rope_theta = config.rope_local_base_freq
                 scaling_factor = 1.0
             else:
-                layer_rope_theta = config.rope_theta
+                layer_rope_theta = getattr(config, "rope_theta", 10000.0)
                 scaling_factor = 1.0
                 if getattr(config, "rope_scaling", None):
                     scaling_factor = config.rope_scaling.get("factor", 1.0)

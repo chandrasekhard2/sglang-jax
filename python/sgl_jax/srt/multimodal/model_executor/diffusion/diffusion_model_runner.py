@@ -69,10 +69,23 @@ class DiffusionModelRunner(BaseModelRunner):
         )
         self.model = self.model_loader.load_model(model_config=self.model_config)
         use_dynamic_shifting = getattr(self.model_config, "use_dynamic_shifting", False)
-        self.solver: FlowUniPCMultistepScheduler = FlowUniPCMultistepScheduler(
-            shift=self.model_config.flow_shift if not use_dynamic_shifting else None,
-            use_dynamic_shifting=use_dynamic_shifting,
-        )
+        scheduler_type = getattr(self.model_config, "scheduler_type", "FlowUniPCMultistepScheduler")
+        
+        if scheduler_type == "EulerScheduler":
+            from sgl_jax.srt.multimodal.models.diffusion_solvers.euler_scheduler import EulerScheduler
+            base_shift = getattr(self.model_config, "base_shift", 0.95)
+            max_shift = getattr(self.model_config, "max_shift", 2.05)
+            self.solver = EulerScheduler(
+                base_shift=base_shift,
+                max_shift=max_shift,
+                stretch=True,
+                terminal=0.1,
+            )
+        else:
+            self.solver = FlowUniPCMultistepScheduler(
+                shift=self.model_config.flow_shift if not use_dynamic_shifting else None,
+                use_dynamic_shifting=use_dynamic_shifting,
+            )
         # self.solver_state = self.solver.create_state()
         # Any additional initialization specific to diffusion models
         self.initialize_jit()
@@ -94,6 +107,8 @@ class DiffusionModelRunner(BaseModelRunner):
             timesteps,
             encoder_hidden_states_image,
             guidance_scale,
+            audio_latent=None,
+            audio_context=None,
         ):
             model_state = jax.tree_util.tree_unflatten(model_state_def, model_state_leaves)
             model = nnx.merge(model_def, model_state)
@@ -103,6 +118,8 @@ class DiffusionModelRunner(BaseModelRunner):
                 timesteps=timesteps,
                 encoder_hidden_states_image=encoder_hidden_states_image,
                 guidance_scale=guidance_scale,
+                audio_latent=audio_latent,
+                audio_context=audio_context,
             )
 
         def forward_wrapper(
@@ -111,6 +128,8 @@ class DiffusionModelRunner(BaseModelRunner):
             timesteps,
             encoder_hidden_states_image,
             guidance_scale,
+            audio_latent=None,
+            audio_context=None,
         ):
             return forward_model(
                 model_def,
@@ -121,6 +140,8 @@ class DiffusionModelRunner(BaseModelRunner):
                 timesteps,
                 encoder_hidden_states_image,
                 guidance_scale,
+                audio_latent=audio_latent,
+                audio_context=audio_context,
             )
 
         self.jitted_forward = forward_wrapper
@@ -148,7 +169,7 @@ class DiffusionModelRunner(BaseModelRunner):
         num_inference_steps = batch.num_inference_steps
         guidance_scale = batch.guidance_scale
         stg_scale = getattr(batch, "stg_scale", 1.0)
-        do_spatio_temporal_guidance = stg_scale > 1.0 and getattr(self.model_config, "stg_mode", False)
+        do_spatio_temporal_guidance = stg_scale > 0.0 and getattr(self.model_config, "stg_mode", False)
         do_classifier_free_guidance = guidance_scale > 1.0 and not do_spatio_temporal_guidance
 
         # Handle prompt embeddings
@@ -197,9 +218,38 @@ class DiffusionModelRunner(BaseModelRunner):
         text_embeds = device_array(
             prompt_embeds, sharding=NamedSharding(self.mesh, PartitionSpec())
         )
+        
+        audio_context = None
+        if getattr(self.model_config, "is_audio_enabled", False) and getattr(batch, "audio_prompt_embeds", None) is not None:
+            audio_prompt_embeds = batch.audio_prompt_embeds
+            if audio_prompt_embeds.ndim == 2:
+                audio_prompt_embeds = jnp.expand_dims(audio_prompt_embeds, axis=0)
+            audio_prompt_embeds = pad_to_512(audio_prompt_embeds)
+            
+            if do_spatio_temporal_guidance:
+                if getattr(batch, "audio_negative_prompt_embeds", None) is not None:
+                    audio_neg_embeds = batch.audio_negative_prompt_embeds
+                    if audio_neg_embeds.ndim == 2:
+                        audio_neg_embeds = jnp.expand_dims(audio_neg_embeds, axis=0)
+                    audio_neg_embeds = pad_to_512(audio_neg_embeds)
+                    audio_prompt_embeds = jnp.concatenate([audio_prompt_embeds, audio_neg_embeds, audio_prompt_embeds], axis=0)
+            elif do_classifier_free_guidance:
+                if getattr(batch, "audio_negative_prompt_embeds", None) is not None:
+                    audio_neg_embeds = batch.audio_negative_prompt_embeds
+                    if audio_neg_embeds.ndim == 2:
+                        audio_neg_embeds = jnp.expand_dims(audio_neg_embeds, axis=0)
+                    audio_neg_embeds = pad_to_512(audio_neg_embeds)
+                    audio_prompt_embeds = jnp.concatenate([audio_prompt_embeds, audio_neg_embeds], axis=0)
+                    
+            audio_context = device_array(
+                audio_prompt_embeds, sharding=NamedSharding(self.mesh, PartitionSpec())
+            )
 
         self.prepare_latents(batch)
         latents = device_array(batch.latents, sharding=NamedSharding(self.mesh, PartitionSpec()))
+        audio_latents = None
+        if getattr(self.model_config, "is_audio_enabled", False) and getattr(batch, "audio_latents", None) is not None:
+            audio_latents = device_array(batch.audio_latents, sharding=NamedSharding(self.mesh, PartitionSpec()))
         
         # Calculate mu for dynamic shifting if needed
         mu = None
@@ -237,24 +287,35 @@ class DiffusionModelRunner(BaseModelRunner):
             t_scalar = jnp.array(self.solver.timesteps, dtype=jnp.int32)[step]
             if do_spatio_temporal_guidance:
                 latents_in = jnp.concatenate([latents] * 3, axis=0)
+                audio_latents_in = jnp.concatenate([audio_latents] * 3, axis=0) if audio_latents is not None else None
             elif do_classifier_free_guidance:
                 latents_in = jnp.concatenate([latents] * 2, axis=0)
+                audio_latents_in = jnp.concatenate([audio_latents] * 2, axis=0) if audio_latents is not None else None
             else:
                 latents_in = latents
+                audio_latents_in = audio_latents
             # Create timestep batch AFTER latents concat to match batch size
             t_batch = jnp.broadcast_to(t_scalar, (latents_in.shape[0],))
             # Transpose to channel-first (B, T, H, W, C) -> (B, C, T, H, W) for model
             latents_cf = latents_in.transpose(0, 4, 1, 2, 3)
             # Perform denoising step
             with jtu.count_pjit_cpp_cache_miss() as count:
-                noise_pred: jax.Array = self.jitted_forward(
+                noise_pred_out = self.jitted_forward(
                     hidden_states=latents_cf,
                     encoder_hidden_states=text_embeds,
                     timesteps=t_batch,
                     encoder_hidden_states_image=None,
                     guidance_scale=None,
+                    audio_latent=audio_latents_in,
+                    audio_context=audio_context,
                 )
-                logger.info("diffusion cache miss count: %d", count())
+                if count() > 0:
+                    logger.info("diffusion cache miss count: %d", count())
+
+            # Handle multimodal outputs (dict with "video" and "audio" keys)
+            is_multimodal = isinstance(noise_pred_out, dict)
+            noise_pred = noise_pred_out["video"] if is_multimodal else noise_pred_out
+            audio_noise_pred = noise_pred_out["audio"] if is_multimodal else None
 
             if do_spatio_temporal_guidance:
                 bsz = latents_in.shape[0] // 3
@@ -275,11 +336,35 @@ class DiffusionModelRunner(BaseModelRunner):
                 x0_pred *= factor
 
                 noise_pred = (latents_slice - x0_pred) / sigma
+                
+                if audio_noise_pred is not None and audio_latents is not None:
+                    audio_guidance_scale = getattr(batch, "audio_guidance_scale", 7.0)
+                    audio_stg_scale = getattr(batch, "audio_stg_scale", 1.0)
+                    a_cond, a_uncond, a_ptb = audio_noise_pred[:bsz], audio_noise_pred[bsz:2*bsz], audio_noise_pred[2*bsz:]
+                    audio_latents_slice = audio_latents[:bsz]
+                    
+                    a_x0_cond = audio_latents_slice - a_cond * sigma
+                    a_x0_uncond = audio_latents_slice - a_uncond * sigma
+                    a_x0_ptb = audio_latents_slice - a_ptb * sigma
+                    a_x0_pred = a_x0_cond + (audio_guidance_scale - 1.0) * (a_x0_cond - a_x0_uncond) + audio_stg_scale * (a_x0_cond - a_x0_ptb)
+                    
+                    a_factor = jnp.std(a_x0_cond, ddof=1) / jnp.maximum(jnp.std(a_x0_pred, ddof=1), 1e-6)
+                    a_factor = rescale_scale * a_factor + (1.0 - rescale_scale)
+                    a_x0_pred *= a_factor
+                    
+                    audio_noise_pred = (audio_latents_slice - a_x0_pred) / sigma
+                    
             elif do_classifier_free_guidance:
                 bsz = latents_in.shape[0] // 2
                 noise_uncond = noise_pred[bsz:]
                 noise_pred = noise_pred[:bsz]
                 noise_pred = noise_uncond + guidance_scale * (noise_pred - noise_uncond)
+                
+                if audio_noise_pred is not None:
+                    audio_guidance_scale = getattr(batch, "audio_guidance_scale", 7.0)
+                    a_noise_uncond = audio_noise_pred[bsz:]
+                    audio_noise_pred = audio_noise_pred[:bsz]
+                    audio_noise_pred = a_noise_uncond + audio_guidance_scale * (audio_noise_pred - a_noise_uncond)
 
             # noise_pred is already channel-first (B, C, T, H, W) from model
             # latents is channel-last (B, T, H, W, C), need to transpose for solver
@@ -289,13 +374,28 @@ class DiffusionModelRunner(BaseModelRunner):
                 sample=latents.transpose(0, 4, 1, 2, 3),  # (B, T, H, W, C) -> (B, C, T, H, W)
                 return_dict=False,
             )[0]
-
             latents = latents.transpose(0, 2, 3, 4, 1)  # back to channel-last
+            
+            # Step audio
+            if audio_noise_pred is not None and audio_latents is not None:
+                # Euler solver manual inline calculation to avoid index mutations
+                sigma = float(self.solver._sigmas[step])
+                sigma_next = float(self.solver._sigmas[step + 1])
+                dt = sigma_next - sigma
+                
+                sample_fp32 = audio_latents.astype(jnp.float32)
+                velocity_fp32 = audio_noise_pred.astype(jnp.float32)
+                
+                prev_sample = sample_fp32 + velocity_fp32 * dt
+                audio_latents = prev_sample.astype(audio_latents.dtype)
+
             if step_callback is not None:
                 step_callback()
 
         logger.info("Finished diffusion step %d in %.2f seconds", step, time.time() - start_time)
         batch.latents = jax.device_get(latents)
+        if getattr(self.model_config, "is_audio_enabled", False) and audio_latents is not None:
+            batch.audio_latents = jax.device_get(audio_latents)
         return False  # Not aborted
 
     def prepare_latents(self, batch: Req):
@@ -321,3 +421,15 @@ class DiffusionModelRunner(BaseModelRunner):
             dtype=jnp.float32,
         )  # Placeholder for latents
         batch.latents = latents
+        
+        if getattr(self.model_config, "is_audio_enabled", False):
+            fps = getattr(self.model_config, "fps", 24.0)
+            duration = (batch.num_frames) / fps
+            latents_per_second = 25.0
+            audio_frames = int(round(duration * latents_per_second))
+            audio_dim = getattr(self.model_config, "audio_in_channels", 128)
+            batch.audio_latents = jax.random.normal(
+                jax.random.PRNGKey(47),
+                (1, audio_frames, audio_dim),
+                dtype=jnp.float32,
+            )

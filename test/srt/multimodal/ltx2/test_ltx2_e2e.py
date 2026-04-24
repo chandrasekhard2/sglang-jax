@@ -30,7 +30,7 @@ class TestLTX2EndToEnd(CustomTestCase):
                 "--skip-server-warmup",
                 "--random-seed", "42",
                 "--multimodal",
-                "--tokenizer-path", "google/gemma-3-12b-it",
+                "--tokenizer-path", "Lightricks/LTX-2",
                 "--download-dir", "/mnt/disks/persist/hf_cache",
                 "--tp-size", "8",
                 "--enable-single-process",

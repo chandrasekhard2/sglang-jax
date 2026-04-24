@@ -92,9 +92,19 @@ class Stage:
         """
         self._in_queue = None
         self._out_queue = None
+        self.server_args = server_args
         runtime = stage_config.runtime
         device_kind = getattr(runtime, "device_kind", "tpu")
         num_devices = runtime.num_tpus
+        if self.server_args.sp_size > 1 and device_kind == "tpu":
+            ici_parallelism = [-1, self.server_args.sp_size, self.server_args.tp_size]
+            mesh_axes = ["data", "sp", "tensor"]
+            use_explicit_sharding = True
+        else:
+            ici_parallelism = [-1, num_devices]
+            mesh_axes = ["data", "tensor"]
+            use_explicit_sharding = True
+
         if device_kind == "cpu":
             cpu_devices = jax.devices("cpu")
             if num_devices > len(cpu_devices):
@@ -102,16 +112,20 @@ class Stage:
                     f"Requested {num_devices} CPU devices, but only {len(cpu_devices)} available."
                 )
             self.mesh = create_device_mesh(
-                ici_parallelism=[-1, num_devices],
+                ici_parallelism=ici_parallelism,
                 dcn_parallelism=[1, 1],
                 devices=cpu_devices[:num_devices],
+                mesh_axes=mesh_axes,
+                use_explicit_sharding=use_explicit_sharding,
             )
         else:
             device_indexes = pre_allocated_devices if pre_allocated_devices is not None else device_manager.allocate(num_devices)
             self.mesh = create_device_mesh(
-                ici_parallelism=[-1, num_devices],
+                ici_parallelism=ici_parallelism,
                 dcn_parallelism=[1, 1],
                 device_indexes=device_indexes,
+                mesh_axes=mesh_axes,
+                use_explicit_sharding=use_explicit_sharding,
             )
         self.stage_config = stage_config
         self.server_args = server_args

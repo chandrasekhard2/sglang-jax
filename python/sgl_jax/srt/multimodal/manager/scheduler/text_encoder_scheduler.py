@@ -52,10 +52,20 @@ class TextEncoderScheduler:
         """
         # Load HF config from the tokenizer path (Gemma) for model architecture
         tokenizer_path = server_args.tokenizer_path or server_args.model_path
-        hf_config = AutoConfig.from_pretrained(
-            tokenizer_path,
-            trust_remote_code=True,
-        )
+        try:
+            hf_config = AutoConfig.from_pretrained(
+                tokenizer_path,
+                trust_remote_code=True,
+            )
+        except ValueError:
+            # Fallback for models like LTX-2 where the text encoder is in a subfolder
+            import os
+            from sgl_jax.srt.multimodal.models.ltx2.utils import get_hf_snapshot_dir
+            snapshot_dir = get_hf_snapshot_dir(tokenizer_path) or tokenizer_path
+            hf_config = AutoConfig.from_pretrained(
+                os.path.join(snapshot_dir, "text_encoder"),
+                trust_remote_code=True,
+            )
         # For Gemma3 multimodal, the text config is under text_config
         if hasattr(hf_config, "text_config"):
             hf_config = hf_config.text_config
@@ -71,7 +81,14 @@ class TextEncoderScheduler:
             )
 
         # Load weights from checkpoints (Gemma + LTX-2 connector)
-        model_config = ModelConfig(model_path=tokenizer_path)
+        try:
+            model_config = ModelConfig(model_path=tokenizer_path)
+        except ValueError:
+            import os
+            from sgl_jax.srt.multimodal.models.ltx2.utils import get_hf_snapshot_dir
+            snapshot_dir = get_hf_snapshot_dir(tokenizer_path) or tokenizer_path
+            model_config = ModelConfig(model_path=os.path.join(snapshot_dir, "text_encoder"))
+            
         model.load_weights(model_config)
 
         logger.info("Text encoder model loaded and weights initialized")

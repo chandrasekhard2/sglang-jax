@@ -240,8 +240,8 @@ def forward_attention(
     # k, v: shape of (total_prefix_len, num_heads, head_dim)
     if num_kv_heads != num_heads:
         num_copies = num_heads // num_kv_heads
-        k_heads = jnp.repeat(k_heads, num_copies, axis=1)
-        v_heads = jnp.repeat(v_heads, num_copies, axis=1)
+        k_heads = jnp.repeat(k_heads, num_copies, axis=1, out_sharding=kv_sharding)
+        v_heads = jnp.repeat(v_heads, num_copies, axis=1, out_sharding=kv_sharding)
 
     # Transpose for matmul: [num_heads, num_tokens, head_dim]
     q_t = jnp.transpose(q_heads, (1, 0, 2))

@@ -101,14 +101,11 @@ class MultimodalDetokenizer(DetokenizerManager):
             # if req.output_file_name:
             if req.data_type == DataType.VIDEO:
                 req.output_file_name = req.rid + ".mp4"
-                # Default to 25fps (LTX-2 reference) when not specified
-                video_fps = req.fps if req.fps is not None else 25
                 imageio.mimsave(
                     req.output_file_name,
                     frames,
-                    fps=video_fps,
+                    fps=req.fps,
                     format=req.data_type.get_default_extension(),
-                    quality=8,
                 )
             else:
                 req.output_file_name = req.rid + ".jpg"
